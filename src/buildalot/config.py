@@ -255,6 +255,10 @@ class ImageTemplate(Template):
 
     def evaluate(self, parameters, exact_match_replacements):
         """Returns ImageTemplate with all parameters and exact_match_replacements expanded."""
+        # Forbid replacing our own ID
+        if self.id in exact_match_replacements:
+            exact_match_replacements = dict(exact_match_replacements.items())
+            del exact_match_replacements[self.id]
         substituted_args = {}
         for name, value in self.build_args:
             name = self._substitute_parameters(
@@ -308,6 +312,8 @@ class GroupTemplate(Template):
             raise ParseError(f"Key {id} must have at least one image specified")
 
         self.id = id
+        if images is None:
+            images = []
         self.images = tuple(images)
 
         self.architectures = []
@@ -320,6 +326,8 @@ class GroupTemplate(Template):
                 self.architectures.append(tuple(arch))
             else:
                 raise ParseError(f"Key {id} has invalid architecture {arch}")
+        if args is None:
+            args = {}
         self.args = tuple(args.items())
 
         parameters = []
@@ -341,8 +349,38 @@ class GroupTemplate(Template):
         raise NotImplementedError
 
     def evaluate(self, parameters, exact_match_replacements):
-        return self  # TODO implement this!
-    
+        """Returns GroupTemplate with all parameters and exact_match_replacements expanded."""
+        # Forbid replacing our own ID
+        if self.id in exact_match_replacements:
+            exact_match_replacements = dict(exact_match_replacements.items())
+            del exact_match_replacements[self.id]
+        substituted_images = []
+        for image in self.images:
+            substituted_images.append(
+                self._substitute_parameters(image, parameters, exact_match_replacements)
+            )
+        substituted_architectures = []
+        for arch, variant in self.architectures:
+            arch = self._substitute_parameters(arch, parameters, exact_match_replacements)
+            if variant:
+                variant = self._substitute_parameters(variant, parameters, exact_match_replacements)
+            substituted_architectures.append((arch, variant))
+        substituted_args = {}
+        for name, value in self.args:
+            name = self._substitute_parameters(
+                name, parameters, exact_match_replacements
+            )
+            value = self._substitute_parameters(
+                value, parameters, exact_match_replacements
+            )
+            substituted_args[name] = value
+        return GroupTemplate(
+            self.id,  # No funny business in the ID field
+            images=substituted_images,
+            architectures=substituted_architectures,
+            args=substituted_args,
+        )
+
     def __str__(self):
         yaml_dict = {}
         yaml_dict["images"] = list(self.images)
