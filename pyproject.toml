@@ -3,7 +3,7 @@ requires = ["setuptools>=59"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "buildahlot"
+name = "buildalot"
 version = "0.0.1"
 license = {file = "LICENSE"}
 readme = "README.md"
@@ -24,4 +24,4 @@ maintainers = [
 ]
 
 [project.scripts]
-buildahlot = "buildahlot.cli:main"
+buildalot = "buildalot.cli:main"
