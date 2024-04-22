@@ -1,0 +1,87 @@
+ros_core:
+  name: "ros"
+  tag: "${rosdistro}-ros-core"
+  build:
+    context: "ros2/ros-core"
+    args:
+      FROM: "${ubuntu_image}"
+ros_base:
+  name: "ros"
+  tag: "${rosdistro}-ros-base"
+  build:
+    context: "ros2/ros-base"
+    args:
+      FROM: ros_core
+perception:
+  name: "ros"
+  tag: "${rosdistro}-perception"
+  build:
+    context: "ros2/perception"
+    args:
+      FROM: ros_base
+desktop:
+  name: "ros"
+  tag: "${rosdistro}-desktop"
+  build:
+    context: "ros2/desktop"
+    args:
+      FROM: ros_base
+simulation:
+  name: "ros"
+  tag: "${rosdistro}-simulation"
+  build:
+    context: "ros2/simulation"
+    args:
+      FROM: ros_base
+desktop_full:
+  name: "ros"
+  tag: "${rosdistro}-desktop-full"
+  build:
+    context: "ros2/desktop-full"
+    args:
+      FROM: desktop
+
+humble:
+  images:
+    - ros_core
+    - ros_base
+    - desktop
+    - perception
+    - simulation
+    - desktop_full
+  architectures:
+    - "amd64"
+    - ["arm64", "v8"]
+  args:
+    rosdistro: "humble"
+    ubuntu_image: "ubuntu:jammy"
+
+iron:
+  images:
+    - ros_core
+    - ros_base
+    - desktop
+    - perception
+    - simulation
+    - desktop_full
+  architectures:
+    - "amd64"
+    - ["arm64", "v8"]
+  args:
+    rosdistro: "iron"
+    ubuntu_image: "ubuntu:jammy"
+
+rolling:
+  images:
+    - ros_core
+    - ros_base
+    - desktop
+    - perception
+    # - simulation
+    # - desktop_full
+  architectures:
+    - "amd64"
+    - ["arm64", "v8"]
+  args:
+    rosdistro: "iron"
+    ubuntu_image: "ubuntu:jammy"

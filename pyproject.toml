@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=59"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "buildahlot"
+version = "0.0.1"
+license = {file = "LICENSE"}
+readme = "README.md"
+description = "Build a lot of OCI or Docker images with buildah"
+requires-python = ">=3.10"
+dependencies = [
+    "PyYaml~=6.0.1",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Utilities",
+]
+maintainers = [
+  {name = "Shane Loretz", email = "shane.loretz@gmail.com"}
+]
+
+[project.scripts]
+buildahlot = "buildahlot.cli:main"
