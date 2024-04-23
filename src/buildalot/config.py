@@ -54,6 +54,35 @@ class Config:
         for thing in self.top_level_stuff:
             params.update(thing.parameters)
         return sorted(tuple(params))
+    
+    def get_top_level(self, top_level_id):
+        for thing in self.top_level_stuff:
+            if thing.id == top_level_id:
+                return thing
+    
+    def _get_all_dependencies(self, thing_id):
+        """Return set of ids of all dependencies of the given id"""
+        dependencies = set()
+        for dep_id in self.graph[thing_id]:
+            dependencies.add(dep_id)
+            dependencies.update(self._get_all_dependencies(dep_id))
+        return dependencies
+    
+    def partial_config(self, want_top_level_ids):
+        """Return a config with just the wanted top level items."""
+        # Partial config must include all transitive dependencies
+        transitive_ids = set(want_top_level_ids)
+        for want_id in want_top_level_ids:
+            if want_id not in self.graph:
+                raise IndexError(f"Config does not have id {want_id}")
+            transitive_ids.update(self._get_all_dependencies(want_id))
+        
+        partial_top_level = []
+        for want_id in transitive_ids:
+            for have_item in self.top_level_stuff:
+                if have_item.id == want_id:
+                    partial_top_level.append(have_item)
+        return Config(partial_top_level)
 
 
 def temporary_parse_config():
@@ -380,6 +409,10 @@ class GroupTemplate(Template):
             architectures=substituted_architectures,
             args=substituted_args,
         )
+    
+    def specifies_args(self):
+        """Return arg names and valuesthat are specified by this group template."""
+        return dict(self.args)
 
     def __str__(self):
         yaml_dict = {}
