@@ -297,7 +297,7 @@ class ImageTemplate(Template):
                 value, parameters, exact_match_replacements
             )
             substituted_args[name] = value
-        return ImageTemplate(
+        return ImageTemplate(  # TODO return ConfiguredImage?
             self.id,  # No funny business in the ID field
             name=self._substitute_parameters(
                 self.name, parameters, exact_match_replacements
@@ -426,3 +426,13 @@ class GroupTemplate(Template):
         yaml_dict["architectures"] = arch_list
         yaml_dict["args"] = dict(self.args)
         return yaml.dump({self.id: yaml_dict})
+
+
+class ConfiguredImage:
+    """
+    ImageTemplate.evaluate produces a ConfiguredImage by specifying
+    all the arguments needed to build that image.
+    """
+
+    def __init__(self, image_template, args, ):
+        pass

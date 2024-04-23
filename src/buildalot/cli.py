@@ -30,14 +30,14 @@ def parse_arguments():
     parser.add_argument("--dry-run", action="store_true")
     # parser.add_argument("--skip-if-exists", action="store_true")
     parser.add_argument("--one-arch", action="store_true")
-    parser.add_argument("--allow-arg-override", action="store_true")
+    parser.add_argument("--cli-arg-overrides", action="store_true")
     parser.add_argument("stuff_to_build", nargs="+")
 
     args = parser.parse_args()
     return args
 
 
-def get_all_required_build_args(need_args, args):
+def parse_cli_build_args(need_args, args):
     """Exit with helpful CLI message unless all required args are given."""
     have_args = {}
     arg_regex = re.compile(r"^([a-zA-Z0-9-_]+)=(.*)$")
@@ -56,8 +56,7 @@ def get_all_required_build_args(need_args, args):
     return have_args
 
 
-"""
-    # This is wrong place to check! GroupImage might provide the argument we need
+def check_have_all_args(have_args, need_args):
     fail = False
     for arg in need_args:
         if arg not in have_args:
@@ -65,16 +64,15 @@ def get_all_required_build_args(need_args, args):
             sys.stderr.write(f"Config needs --arg {arg}=??? to be specified\n")
     if fail:
         sys.exit(-1)
-"""
 
 
-def consolidate_arguments(cli_args, group_args, allow_override):
+def consolidate_args(cli_args, group_args, allow_override):
     fail = False
     for cli_name in cli_args.keys():
         if cli_name in group_args and not allow_override:
             fail = True
             sys.stderr.write(
-                f"--arg {cli_name} is specified by both the command line and group, but --allow-arg-override was not given\n"
+                f"--arg {cli_name} is specified by both the command line and group, but --cli-arg-overrides was not given\n"
             )
     if fail:
         sys.exit(-1)
@@ -89,22 +87,38 @@ def main():
 
     config = temporary_parse_config()
     partial_config = config.partial_config(args.stuff_to_build)
-    have_cli_args = get_all_required_build_args(partial_config.parameters(), args)
-
-    for thing_id in args.stuff_to_build:
-        thing_to_build = partial_config.get_top_level(thing_id)
-        if isinstance(thing_to_build, ImageTemplate):
-            # TODO try building one image
-            pass
-        elif isinstance(thing_to_build, GroupTemplate):
-            # TODO Try building a group of images
-            # Group template can provide arguments
-            have_group_args = thing_to_build.specifies_args()
-            final_args = consolidate_arguments(
-                have_cli_args, have_group_args, args.allow_arg_override
-            )
-            # TODO check that we have all required arguments!
-            print(final_args)
+    have_cli_args = parse_cli_build_args(partial_config.parameters(), args)
 
     print(partial_config.graph)
     print(partial_config.build_order)
+
+    for thing_id in args.stuff_to_build:
+        thing_config = partial_config.partial_config([thing_id])
+        thing_to_build = thing_config.get_top_level(thing_id)
+        
+        need_args = thing_config.parameters()
+        if isinstance(thing_to_build, ImageTemplate):
+            check_have_all_args(final_args, need_args)
+            # TODO try building one image
+            # One image means only one arch (native)
+            # One image CAN depend on other images
+            # Could wrap this one in an "implicit group"
+            # that specifies one image with arguments
+        elif isinstance(thing_to_build, GroupTemplate):
+            # Group template can provide arguments
+            have_group_args = thing_to_build.specifies_args()
+            final_args = consolidate_args(
+                have_cli_args, have_group_args, args.cli_arg_overrides
+            )
+            check_have_all_args(final_args, need_args)
+            print(final_args)
+            # TODO Try building a group of images
+            # Group can have multiple architectures, which means
+            # building multiple images and connecting them with a
+            # manifest. I have a topolotical order here, but I need
+            # that plus all the stuff to build consolidated.
+            # Maybe I need instances of ConfiguredImage where all
+            # arguments are specified.
+            # Then the list of ConfiguredImages can be built from the bottom up
+            # Each ConfiguredImage might produce multiple build jobs followed
+            # by a manifest job.
