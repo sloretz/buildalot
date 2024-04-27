@@ -30,8 +30,8 @@ def parse_arguments():
     parser.add_argument("--dry-run", action="store_true")
     # parser.add_argument("--skip-if-exists", action="store_true")
     parser.add_argument("--one-arch", action="store_true")
-    parser.add_argument("--cli-arg-overrides", action="store_true")
-    parser.add_argument("stuff_to_build", nargs="+")
+    parser.add_argument("--cli-args-override", action="store_true")
+    parser.add_argument("thing_to_build")
 
     args = parser.parse_args()
     return args
@@ -72,7 +72,7 @@ def consolidate_args(cli_args, group_args, allow_override):
         if cli_name in group_args and not allow_override:
             fail = True
             sys.stderr.write(
-                f"--arg {cli_name} is specified by both the command line and group, but --cli-arg-overrides was not given\n"
+                f"--arg {cli_name} is specified by both the command line and group, but --cli-args-overrides was not given\n"
             )
     if fail:
         sys.exit(-1)
@@ -86,39 +86,15 @@ def main():
     args = parse_arguments()
 
     config = temporary_parse_config()
-    partial_config = config.partial_config(args.stuff_to_build)
-    have_cli_args = parse_cli_build_args(partial_config.parameters(), args)
+    relevant_config = config.partial_config([args.thing_to_build])
+    need_args = relevant_config.parameters()
+    have_cli_args = parse_cli_build_args(need_args, args)
 
-    print(partial_config.graph)
-    print(partial_config.build_order)
+    bound_config = relevant_config.bind(have_cli_args, args.cli_args_override)
 
-    for thing_id in args.stuff_to_build:
-        thing_config = partial_config.partial_config([thing_id])
-        thing_to_build = thing_config.get_top_level(thing_id)
-        
-        need_args = thing_config.parameters()
-        if isinstance(thing_to_build, ImageTemplate):
-            check_have_all_args(final_args, need_args)
-            # TODO try building one image
-            # One image means only one arch (native)
-            # One image CAN depend on other images
-            # Could wrap this one in an "implicit group"
-            # that specifies one image with arguments
-        elif isinstance(thing_to_build, GroupTemplate):
-            # Group template can provide arguments
-            have_group_args = thing_to_build.specifies_args()
-            final_args = consolidate_args(
-                have_cli_args, have_group_args, args.cli_arg_overrides
-            )
-            check_have_all_args(final_args, need_args)
-            print(final_args)
-            # TODO Try building a group of images
-            # Group can have multiple architectures, which means
-            # building multiple images and connecting them with a
-            # manifest. I have a topolotical order here, but I need
-            # that plus all the stuff to build consolidated.
-            # Maybe I need instances of ConfiguredImage where all
-            # arguments are specified.
-            # Then the list of ConfiguredImages can be built from the bottom up
-            # Each ConfiguredImage might produce multiple build jobs followed
-            # by a manifest job.
+    print(bound_config)
+
+    # Now that I have the bound config (sort of, I wish it was a graph)
+    # It's time to break down the work into OCI images and manifests to build
+    # Sort of seems like "Group" should disappear after binding.
+    # Like, args have been applied to images, maybe architectures should be applied too.
