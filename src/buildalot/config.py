@@ -300,16 +300,32 @@ class BoundConfig:
 
     def __init__(self, graph, bound_images):
         ts = graphlib.TopologicalSorter(graph)
-        self.__graph = copy.deepcopy(graph)
+        self.__dependency_graph = copy.deepcopy(graph)
+        self.__dependent_graph = self.__build_dependent_graph(self.__dependency_graph)
         self.__build_order = tuple(ts.static_order())
         self.__bound_images = [b for b in bound_images]
+
+    def __build_dependent_graph(self, dependency_graph):
+        dependent_graph = {}
+        for image_id in dependency_graph.keys():
+            dependent_graph[image_id] = set()
+            for other_id in dependency_graph.keys():
+                if image_id == other_id:
+                    continue
+                if image_id in self.__dependency_graph[other_id]:
+                    # Other depends on this one!
+                    dependent_graph[image_id].add(other_id)
+        return dependent_graph
 
     @property
     def build_order(self):
         return tuple(self.__build_order)
 
     def dependencies_of(self, image_id):
-        return tuple(self.__graph[image_id])
+        return tuple(self.__dependency_graph[image_id])
+
+    def dependents_of(self, image_id):
+        return tuple(self.__dependent_graph[image_id])
 
     def get_image(self, image_id):
         for image in self.__bound_images:
@@ -614,22 +630,19 @@ class BoundImage:
         arches = self.__build_architectures
         if isinstance(arches, BoundValue):
             arches = [(a, v) for a, v in arches.value]
+        ret_val = []
         for a, v in arches:
-            if isinstance(a, BoundValue):
-                a = a.value
-            if isinstance(v, BoundValue):
-                v = v.value
-            yield (a, v)
+            if isinstance(v, BoundValue) and v.value is None:
+                ret_val.append((str(a), None))
+            else:
+                ret_val.append((str(a), str(v)))
+        return ret_val
 
     @property
     def build_args(self):
         build_args = []
         for key, value in self.__build_args:
-            if isinstance(key, BoundValue):
-                key = key.value
-            if isinstance(value, BoundValue):
-                value = value.value
-            build_args.append((key, value))
+            build_args.append((str(key), str(value)))
         return build_args
 
     @property

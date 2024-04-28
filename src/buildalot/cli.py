@@ -17,10 +17,8 @@ import re
 import sys
 
 from .config import BindSource
-from .config import Template
 from .config import temporary_parse_config
-from .config import ImageTemplate
-from .config import GroupTemplate
+from . import oci
 
 
 def parse_arguments():
@@ -105,8 +103,9 @@ def main():
     print(repr(bound_config))
     print("-----------------")
     print(bound_config)
-    print(bound_config.build_order)
-    print(bound_config.dependencies_of("desktop"))
+    print("-----------------")
+    oci_graph = oci.build_graph(bound_config)
+    print(oci.graph_to_dot(oci_graph))
 
     # Now that I have the bound config (sort of, I wish it was a graph)
     # It's time to break down the work into OCI images and manifests to build
