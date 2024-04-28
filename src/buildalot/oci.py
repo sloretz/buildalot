@@ -77,7 +77,7 @@ def _extend_oci_graph(
     oci_manifest: Optional[OCIManifest] = None
 
     architectures = image.build_architectures
-    if architectures is not None:
+    if architectures:
         # Make a bunch of arch specific images with temporary tags
         for arch, variant in architectures:
             # Need a temporary tag so that it can be added to a manifest

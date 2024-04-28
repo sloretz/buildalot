@@ -27,9 +27,7 @@ def parse_arguments():
     parser.add_argument("--config", nargs=1, default=["buildalot.yaml"])
     parser.add_argument("--push", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    # parser.add_argument("--skip-if-exists", action="store_true")
-    parser.add_argument("--one-arch", action="store_true")
-    # parser.add_argument("--cli-args-override", action="store_true")
+    parser.add_argument("--native-arch-only", action="store_true")
     parser.add_argument("thing_to_build")
 
     args = parser.parse_args()
@@ -67,22 +65,6 @@ def check_have_all_args(have_args, need_args):
         sys.exit(-1)
 
 
-def consolidate_args(cli_args, group_args, allow_override):
-    fail = False
-    for cli_name in cli_args.keys():
-        if cli_name in group_args and not allow_override:
-            fail = True
-            sys.stderr.write(
-                f"--arg {cli_name} is specified by both the command line and group, but --cli-args-overrides was not given\n"
-            )
-    if fail:
-        sys.exit(-1)
-    args = {}
-    args.update(cli_args)
-    args.update(group_args)
-    return args
-
-
 def main():
     args = parse_arguments()
 
@@ -93,7 +75,7 @@ def main():
 
     cli_binding = BindSource(
         source_name="__command_line__",
-        architectures=None,  # TODO architectures from CLI?
+        architectures=[] if args.native_arch_only else None,
         arguments=have_cli_build_args,
     )
 
@@ -107,7 +89,7 @@ def main():
     oci_graph = oci.build_graph(bound_config)
     print(oci.graph_to_dot(oci_graph))
 
-    # Now that I have the bound config (sort of, I wish it was a graph)
-    # It's time to break down the work into OCI images and manifests to build
-    # Sort of seems like "Group" should disappear after binding.
-    # Like, args have been applied to images, maybe architectures should be applied too.
+    # Now that I have the OCI graph, it's time to turn it into buildah commands
+    # Some sort of buildah.build_graph(oci_graph) to produce
+    # a graph of work to execute.
+    # Then I can pass that to some sort of concurrent.futures executor!
