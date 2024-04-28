@@ -16,6 +16,7 @@ import argparse
 import re
 import sys
 
+from .config import BindSource
 from .config import Template
 from .config import temporary_parse_config
 from .config import ImageTemplate
@@ -30,7 +31,7 @@ def parse_arguments():
     parser.add_argument("--dry-run", action="store_true")
     # parser.add_argument("--skip-if-exists", action="store_true")
     parser.add_argument("--one-arch", action="store_true")
-    parser.add_argument("--cli-args-override", action="store_true")
+    # parser.add_argument("--cli-args-override", action="store_true")
     parser.add_argument("thing_to_build")
 
     args = parser.parse_args()
@@ -39,21 +40,23 @@ def parse_arguments():
 
 def parse_cli_build_args(need_args, args):
     """Exit with helpful CLI message unless all required args are given."""
-    have_args = {}
+    have_build_args = []
     arg_regex = re.compile(r"^([a-zA-Z0-9-_]+)=(.*)$")
     for argvalue in args.arg:
         m = arg_regex.match(argvalue)
         if m is None:
             sys.stderr.write("Invalid --arg format '{argvalue}'\n")
             sys.exit(-1)
-        given_arg = m.group(1)
-        given_value = m.group(2)
-        if given_arg not in need_args:
-            sys.stderr.write(f"Given unnecessary --arg {given_arg}={given_value}\n")
+        given_build_arg = m.group(1)
+        given_build_value = m.group(2)
+        if given_build_arg not in need_args:
+            sys.stderr.write(
+                f"Given unnecessary --arg {given_build_arg}={given_build_value}\n"
+            )
             sys.exit(-1)
-        have_args[given_arg] = given_value
+        have_build_args.append((given_build_arg, given_build_value))
 
-    return have_args
+    return have_build_args
 
 
 def check_have_all_args(have_args, need_args):
@@ -88,11 +91,22 @@ def main():
     config = temporary_parse_config()
     relevant_config = config.partial_config([args.thing_to_build])
     need_args = relevant_config.parameters()
-    have_cli_args = parse_cli_build_args(need_args, args)
+    have_cli_build_args = parse_cli_build_args(need_args, args)
 
-    bound_config = relevant_config.bind(have_cli_args, args.cli_args_override)
+    cli_binding = BindSource(
+        source_name="__command_line__",
+        architectures=None,  # TODO architectures from CLI?
+        arguments=have_cli_build_args,
+    )
 
+    print(relevant_config)
+    print("-----------------")
+    bound_config = relevant_config.bind(cli_binding)
+    print(repr(bound_config))
+    print("-----------------")
     print(bound_config)
+    print(bound_config.build_order)
+    print(bound_config.dependencies_of("desktop"))
 
     # Now that I have the bound config (sort of, I wish it was a graph)
     # It's time to break down the work into OCI images and manifests to build

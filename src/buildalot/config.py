@@ -7,6 +7,9 @@ from typing import Optional
 import yaml
 
 
+PARAM_REGEX = re.compile(r"\${\s*([a-zA-Z0-9-_]+)\s*}")
+
+
 class ParseError(RuntimeError):
 
     def __init__(self, msg):
@@ -32,15 +35,6 @@ def parse_config(stream):
         top_level.append(GroupTemplate.ParseFrom(item))
 
 
-class CliArgWouldOverrideError(RuntimeError):
-
-    def __init__(self, problem_args):
-        self.problem_args = problem_args
-        super(
-            f"CLI arguments {problem_args} would override Group arguments, but overriding was not allowed"
-        )
-
-
 class IdResolver:
 
     def __init__(self, identifier: str):
@@ -58,46 +52,192 @@ class IdResolver:
 
     def __str__(self):
         if self._resolved_id is None:
-            return f'IdResolver("{self._identifier}"){hex(id(self))}'
+            return self._identifier
         else:
             return self._resolved_id
-        
-    def __deepcopy__(self,el):
-        raise RuntimeError('IdResolver must not be copied!')
+
+    def __repr__(self):
+        return f"<IdResolver:{self._identifier}>"
+
+    def __deepcopy__(self, el):
+        raise RuntimeError("IdResolver must not be copied!")
 
     def __copy__(self):
-        raise RuntimeError('IdResolver must not be copied!')
+        raise RuntimeError("IdResolver must not be copied!")
+
+
+class BoundValue:
+
+    def __init__(self, source_name, value):
+        self.__source_name = source_name
+        self.__value = value
+
+    @property
+    def source_name(self):
+        return self.__source_name
+
+    @property
+    def value(self):
+        return self.__value
+
+    def __eq__(self, other):
+        return self.__value == other
+
+    def __str__(self):
+        return str(self.__value)
+
+    def __repr__(self):
+        return f'<BoundValue(source_name="{self.source_name}", value="{self.value}">'
+
+
+class BindSource:
+    """Architectures and arguments that get bound to Image."""
+
+    def __init__(
+        self,
+        *,
+        source_name: str,
+        architectures: Optional[list[tuple[str, Optional[str]]]],
+        arguments: list[tuple[str, str]],
+    ):
+        self.__source_name = source_name
+        self.__architectures = None if architectures is None else tuple(architectures)
+        self.__arguments = tuple(arguments)
+
+    @property
+    def source_name(self):
+        return self.__source_name
+
+    @property
+    def architectures(self):
+        return self.__architectures
+
+    @property
+    def arguments(self):
+        return self.__arguments
+
+
+class BindChain:
+
+    def __init__(self, *links):
+        self._links = [l for l in links]
+
+    def add_child_source(self, binding: BindSource):
+        self._links.append(binding)
+
+    @property
+    def architectures(self):
+        """Return architectures to build for a multiarch image, or None if only native arch should be used."""
+        # First to specify architectures wins
+        for binding in self._links:
+            if binding.architectures is not None:
+                value = []
+                for arch, variant in binding.architectures:
+                    value.append(
+                        (
+                            BoundValue(source_name=binding.source_name, value=arch),
+                            BoundValue(source_name=binding.source_name, value=variant),
+                        )
+                    )
+                return tuple(value)
+
+    def argument_value(self, name):
+        """Return value of arghument."""
+        # First to specify argument wins
+        for binding in self._links:
+            for arg_name, value in binding.arguments:
+                if arg_name == name:
+                    return BoundValue(source_name=binding.source_name, value=value)
+        sources = [l.source_name for l in self._links]
+        raise ValueError(f'Argument "{name}" was not provided by: {sources}')
+
+
+class BoundFormatString(BoundValue):
+
+    @classmethod
+    def FromStringAndChain(cls, string: str, bind_chain: BindChain):
+        values = {}
+        format_string = string
+        for arg_name in PARAM_REGEX.findall(string):
+            values[arg_name] = bind_chain.argument_value(arg_name)
+            sub_regex = r"\${\s*" + arg_name + r"\s*}"
+            format_string = re.sub(sub_regex, "{" + arg_name + "}", format_string)
+        if values:
+            return cls(format_string, values)
+        # No values to format, return string unmodified
+        return string
+
+    @property
+    def value(self):
+        return str(self)
+
+    def __init__(self, format_string: str, values: dict[str, BoundValue]):
+        self.__format_string = format_string
+        self.__values = values
+
+    def __str__(self) -> str:
+        str_values = {}
+        for arg_name, arg_value in self.__values.items():
+            str_values[arg_name] = str(arg_value)
+        return self.__format_string.format(**str_values)
+
+    def __repr__(self) -> str:
+        repr_values = {}
+        for arg_name, arg_value in self.__values.items():
+            repr_values[arg_name] = repr(arg_value)
+        return (
+            "<BoundFormatString:"
+            + repr(self.__format_string.format(**repr_values))
+            + ">"
+        )
+
+    def __eq__(self, other):
+        return str(self) == other
 
 
 class Config:
 
     def __init__(self, images_and_groups):
         # All top-level things, unsorted at this point
-        self.images_and_groups = images_and_groups
+        self.images = [i for i in images_and_groups if isinstance(i, ImageTemplate)]
+        self.groups = [g for g in images_and_groups if isinstance(g, GroupTemplate)]
+        self.id_resolvers = {}
 
         # Add all the nodes to the graph
         self.graph = {}
-        for thing in images_and_groups:
-            self.graph[thing.id] = set()
-        for thing in images_and_groups:
+        for image_or_group in images_and_groups:
+            self.graph[image_or_group.id] = set()
+        for image_or_group in images_and_groups:
             for other in images_and_groups:
-                if other.uses_id(thing.id):
+                if other.uses_id(image_or_group.id):
                     # Found an edge! Other thing needs this thing
-                    self.graph[other.id].add(thing.id)
+                    self.graph[other.id].add(image_or_group.id)
+
+        # Create IdResolvers for images
+        for image in self.images:
+            self.id_resolvers[image.id] = IdResolver(image.id)
+
+        # Inject IdResolvers for images (groups can't depend on groups...yet)
+        for image in self.images:
+            for dep_id in self.graph[image.id]:
+                image.inject_resolver(self.id_resolvers[dep_id])
 
         ts = graphlib.TopologicalSorter(self.graph)
         self.build_order = tuple(ts.static_order())
 
+    def __str__(self):
+        return "\n".join([str(i) for i in self.images] + [str(g) for g in self.groups])
+
     def parameters(self):
         params = set()
-        for thing in self.images_and_groups:
+        for thing in self.images + self.groups:
             params.update(thing.parameters)
         return sorted(tuple(params))
 
     def get_top_level(self, top_level_id):
-        for thing in self.images_and_groups:
-            if thing.id == top_level_id:
-                return thing
+        for image in self.images + self.groups:
+            if image.id == top_level_id:
+                return image
 
     def _get_all_dependencies(self, thing_id):
         """Return set of ids of all dependencies of the given id"""
@@ -118,83 +258,69 @@ class Config:
 
         partial_top_level = []
         for want_id in transitive_ids:
-            for have_item in self.images_and_groups:
-                if have_item.id == want_id:
-                    partial_top_level.append(have_item)
+            image_or_group = self.get_top_level(want_id)
+            if image_or_group is not None:
+                partial_top_level.append(image_or_group)
+
         return Config(partial_top_level)
 
-    def _consolidate_args(self, cli_args, group_args, cli_args_override):
-        args_in_both = []
-        for cli_name in cli_args.keys():
-            if cli_name in group_args and not cli_args_override:
-                args_in_both.append(cli_name)
-        if args_in_both:
-            raise CliArgWouldOverrideError(args_in_both)
-        args = {}
-        args.update(cli_args)
-        args.update(group_args)
-        return args
-
-    def bind(self, cli_args, cli_args_override=False):
+    def bind(self, bind_source: BindSource):
         # Assert that there is only one group because I don't need
         # nor have the time to make it possible to build multiple top
         # level groups right now
-        num_groups = 0
-        for thing in self.build_order:
-            if isinstance(thing, GroupTemplate):
-                num_groups += 1
-        if num_groups > 1:
-            raise NotImplementedError
-        if num_groups == 1 and not isinstance(self.build_order[-1], GroupTemplate):
+        if len(self.groups) > 1:
             raise NotImplementedError
 
-        id_resolvers = {}
-        for image_or_group in self.images_and_groups:
-            id_resolvers[image_or_group.id] = IdResolver(image_or_group.id)
+        bind_chain = BindChain(bind_source)
 
-        all_args = copy.deepcopy(cli_args)
+        if self.groups:
+            # Assume all images are bound by the group
+            group: GroupTemplate = self.groups[0]
+            bind_chain.add_child_source(group.bind(bind_chain))
 
-        # Args propogate from top down, but ID needs to be resolved
-        # from bottom up...
-        # Could put placeholder ID while binding the first time,
-        # Then go back through and update placeholders...
-
-        # List of BoundImage or BoundGroup
-        bound_image_or_groups = []
+        # List of BoundImage
+        bound_images = []
         for thing_id in reversed(self.build_order):
-            thing = self.get_top_level(thing_id)
-            bound_thing = thing.bind(all_args, id_resolvers)
-            if isinstance(bound_thing, BoundGroup):
-                # This code assumes there's only one group
-                group_args = bound_thing.args
-                all_args = self._consolidate_args(
-                    cli_args, group_args, cli_args_override
-                )
-            bound_image_or_groups.append(bound_thing)
+            for image in self.images:
+                if thing_id == image.id:
+                    bound_images.append(image.bind(bind_chain))
 
-        for bound_image_or_group in bound_image_or_groups:
-            if isinstance(bound_image_or_group, BoundImage):
-                id_resolver = id_resolvers[bound_image_or_group.id]
-                id_resolver.resolve(bound_image_or_group.fully_qualified_name)
+        for image in bound_images:
+            id_resolver = self.id_resolvers[image.id]
+            id_resolver.resolve(image.fully_qualified_name)
 
-        return BoundConfig(self.graph, self.build_order, bound_image_or_groups)
+        image_graph = {}
+        for image in bound_images:
+            image_graph[image.id] = tuple(self.graph[image.id])
+
+        return BoundConfig(image_graph, bound_images)
 
 
 class BoundConfig:
 
-    def __init__(self, graph, build_order, bound_items):
-
+    def __init__(self, graph, bound_images):
+        ts = graphlib.TopologicalSorter(graph)
         self.__graph = copy.deepcopy(graph)
-        self.__build_order = [i for i in build_order]
-        self.__bound_items = [b for b in bound_items]
+        self.__build_order = tuple(ts.static_order())
+        self.__bound_images = [b for b in bound_images]
 
-    def get_top_level(self, top_level_id):
-        for thing in self.__bound_items:
-            if thing.id == top_level_id:
-                return thing
+    @property
+    def build_order(self):
+        return tuple(self.__build_order)
+
+    def dependencies_of(self, image_id):
+        return tuple(self.__graph[image_id])
+
+    def get_image(self, image_id):
+        for image in self.__bound_images:
+            if image.id == image_id:
+                return image
 
     def __str__(self):
-        return "\n".join([str(thing) for thing in self.__bound_items])
+        return "\n".join([str(image) for image in self.__bound_images])
+
+    def __repr__(self):
+        return "\n".join([repr(image) for image in self.__bound_images])
 
 
 def temporary_parse_config():
@@ -304,39 +430,16 @@ def temporary_parse_config():
 
 class Template:
 
-    param_regex = re.compile(r"\${\s*([a-zA-Z0-9-_]+)\s*}")
-
     def __init__(self, parameters):
         self.parameters = tuple(parameters)
 
     def __eq__(self, other):
-        # print("---equality check---")
-        # print(str(self))
-        # print("--------------------")
-        # print(str(other))
-        # print("---end ---- check---")
-        # result = str(self) == str(other)
-        # print("Result", result)
         return str(self) == str(other)
 
     @classmethod
     def _extract_parameters(cls, text):
         """Returns a list of parameters that could be used to modify text."""
-        return tuple(cls.param_regex.findall(text))
-
-    @classmethod
-    def _substitute_parameter(cls, text, param_name, value):
-        sub_regex = r"\${\s*" + param_name + r"\s*}"
-        return re.sub(sub_regex, str(value), text)
-
-    @classmethod
-    def _substitute_parameters(cls, text, parameters, exact_id_replacements=None):
-        if exact_id_replacements:
-            if text in exact_id_replacements:
-                return exact_id_replacements[text]
-        for name, value in parameters.items():
-            text = cls._substitute_parameter(text, name, value)
-        return text
+        return tuple(PARAM_REGEX.findall(text))
 
 
 class ImageTemplate(Template):
@@ -359,7 +462,7 @@ class ImageTemplate(Template):
         if tag is None:
             tag = "${tag}"
         if build_context is None:
-            raise ParseError(f"Key {id} is missing required build: context:")
+            raise ParseError(f"Image {id} is missing required build: context:")
         if build_args is None:
             build_args = {}
 
@@ -382,49 +485,52 @@ class ImageTemplate(Template):
         super().__init__(parameters)
 
     def uses_id(self, exact_id):
-        # Allowed to use top-level ID in:
-        #   * build_arg values
         if self.id == exact_id:
             return False
         for _, value in self.build_args:
             if value == exact_id:
                 return True
-            elif isinstance(value, IdResolver) and IdResolver.identifier == exact_id:
+            elif isinstance(value, IdResolver) and value.identifier == exact_id:
                 return True
         return False
 
-    def bind(self, given_args, exact_id_replacements):
+    def inject_resolver(self, id_resolver: IdResolver):
+        if self.id == id_resolver.identifier:
+            return
+        injected_args = []
+        for name, value in self.build_args:
+            if value == id_resolver.identifier:
+                # new never-been-resolved ID
+                value = id_resolver
+            elif (
+                isinstance(value, IdResolver)
+                and value.identifier == id_resolver.identifier
+            ):
+                # Already resolved, replace existing resolver
+                value = id_resolver
+            injected_args.append((name, value))
+        self.build_args = injected_args
+
+    def bind(self, bind_chain: BindChain):
         """Returns BoundImage with all parameters and exact_id_replacements expanded."""
-        # Require all parameters to be bound
-        for parameter in self.parameters:
-            if parameter not in given_args:
-                raise RuntimeError(
-                    f"ImageTemplate.bind requires argument {parameter}, but it was not given"
-                )
-        # Forbid replacing our own ID
-        if self.id in exact_id_replacements:
-            exact_id_replacements = dict(exact_id_replacements.items())
-            del exact_id_replacements[self.id]
-        # Make a list of our own dependencies
-        depends_on_ids = []
-        for other_id in exact_id_replacements.keys():
-            if self.uses_id(other_id):
-                depends_on_ids.append(other_id)
         substituted_args = []
         for name, value in self.build_args:
-            name = self._substitute_parameters(name, given_args)
-            value = self._substitute_parameters(
-                value, given_args, exact_id_replacements
-            )
+            name = BoundFormatString.FromStringAndChain(name, bind_chain)
+            if isinstance(value, str):
+                value = BoundFormatString.FromStringAndChain(value, bind_chain)
+            else:
+                assert isinstance(value, IdResolver)
             substituted_args.append((name, value))
         return BoundImage(
             id=self.id,  # No funny business in the ID field
-            registry=self._substitute_parameters(self.registry, given_args),
-            name=self._substitute_parameters(self.name, given_args),
-            tag=self._substitute_parameters(self.tag, given_args),
-            build_context=self._substitute_parameters(self.build_context, given_args),
+            registry=BoundFormatString.FromStringAndChain(self.registry, bind_chain),
+            name=BoundFormatString.FromStringAndChain(self.name, bind_chain),
+            tag=BoundFormatString.FromStringAndChain(self.tag, bind_chain),
+            build_context=BoundFormatString.FromStringAndChain(
+                self.build_context, bind_chain
+            ),
+            build_architectures=bind_chain.architectures,
             build_args=substituted_args,
-            depends_on_ids=depends_on_ids,
         )
 
     def __str__(self):
@@ -439,7 +545,7 @@ class ImageTemplate(Template):
                 build_dict["args"][name] = str(value)
 
         yaml_dict["build"] = build_dict
-        return yaml.dump({self.id: yaml_dict})
+        return yaml.dump({self.id: yaml_dict}, width=float("inf"))
 
     @classmethod
     def ParseFrom(cls, yaml_dict):
@@ -465,20 +571,23 @@ class BoundImage:
         name: str,
         tag: str,
         build_context,
+        build_architectures,
         build_args,
-        depends_on_ids,
     ):
         self.__id = id
-        self.__registry = registry.rstrip("/")
+        self.__registry = registry
         self.__name = name
         self.__tag = tag
         self.__build_context = build_context
+        self.__build_architectures = build_architectures
         self.__build_args = [(n, v) for n, v in build_args]
-        self.__depends_on_ids = [i for i in depends_on_ids]
 
     @property
     def fully_qualified_name(self) -> str:
-        return f"{self.__registry}/{self.__name}:{self.__tag}"
+        registry = str(self.__registry).rstrip("/")
+        name = str(self.__name)
+        tag = str(self.__tag)
+        return f"{registry}/{name}:{tag}"
 
     @property
     def id(self) -> str:
@@ -486,23 +595,42 @@ class BoundImage:
 
     @property
     def registry(self) -> str:
-        return self.__registry
+        return str(self.__registry)
 
     @property
     def name(self) -> str:
-        return self.__name
+        return str(self.__name)
 
     @property
     def tag(self) -> str:
-        return self.__tag
+        return str(self.__tag)
 
     @property
     def build_context(self):
-        return self.__build_context
+        return str(self.__build_context)
+
+    @property
+    def build_architectures(self):
+        arches = self.__build_architectures
+        if isinstance(arches, BoundValue):
+            arches = [(a, v) for a, v in arches.value]
+        for a, v in arches:
+            if isinstance(a, BoundValue):
+                a = a.value
+            if isinstance(v, BoundValue):
+                v = v.value
+            yield (a, v)
 
     @property
     def build_args(self):
-        return dict(self.__build_args)
+        build_args = []
+        for key, value in self.__build_args:
+            if isinstance(key, BoundValue):
+                key = key.value
+            if isinstance(value, BoundValue):
+                value = value.value
+            build_args.append((key, value))
+        return build_args
 
     @property
     def dependencies(self):
@@ -517,9 +645,45 @@ class BoundImage:
         if self.build_args:
             build_dict["args"] = {}
             for name, value in self.__build_args:
-                build_dict["args"][name] = str(value)
+                build_dict["args"][str(name)] = str(value)
+        arches = []
+        for a, v in self.build_architectures:
+            if v is None:
+                arches.append(a)
+            else:
+                arches.append([a, v])
+        if arches:
+            build_dict["architectures"] = arches
+
         yaml_dict["build"] = build_dict
-        return yaml.dump({self.id: yaml_dict})
+        return yaml.dump({self.id: yaml_dict}, width=float("inf"))
+
+    def __repr__(self):
+
+        def maybe_repr(value):
+            if isinstance(value, str):
+                return value
+            return repr(value)
+
+        yaml_dict = {}
+        yaml_dict["registry"] = maybe_repr(self.__registry)
+        yaml_dict["name"] = maybe_repr(self.__name)
+        yaml_dict["tag"] = maybe_repr(self.__tag)
+        build_dict = {"context": maybe_repr(self.__build_context)}
+        if self.build_args:
+            build_dict["args"] = {}
+            for name, value in self.__build_args:
+                build_dict["args"][maybe_repr(name)] = maybe_repr(value)
+        arches = []
+        for a, v in self.__build_architectures:
+            if v is None:
+                arches.append(maybe_repr(a))
+            else:
+                arches.append([maybe_repr(a), maybe_repr(v)])
+        if arches:
+            build_dict["architectures"] = arches
+        yaml_dict["build"] = build_dict
+        return yaml.dump({self.id: yaml_dict}, width=float("inf"))
 
 
 class GroupTemplate(Template):
@@ -581,47 +745,23 @@ class GroupTemplate(Template):
         if the yaml dictionary is a valid template for one, else raises."""
         raise NotImplementedError
 
-    def bind(self, given_args, exact_id_replacements):
-        """Returns BoundGroup with all parameters and exact_id_replacements expanded."""
-        # Require all parameters to be bound
-        for parameter in self.parameters:
-            if parameter not in given_args:
-                raise RuntimeError(
-                    f"ImageTemplate.bind requires argument {parameter}, but it was not given"
-                )
-        # Make a list of our own dependencies
-        depends_on_ids = []
-        for other_id in exact_id_replacements.keys():
-            if self.uses_id(other_id):
-                depends_on_ids.append(other_id)
-        # Forbid replacing our own ID
-        if self.id in exact_id_replacements:
-            exact_id_replacements = dict(exact_id_replacements.items())
-            del exact_id_replacements[self.id]
-        substituted_images = []
-        for image in self.images:
-            substituted_images.append(
-                self._substitute_parameters(image, given_args, exact_id_replacements)
-            )
+    def bind(self, bind_chain: BindChain) -> BindSource:
+        """Returns a new Binding chained from the given binding."""
         substituted_architectures = []
         for arch, variant in self.architectures:
-            arch = self._substitute_parameters(arch, given_args)
+            arch = BoundFormatString.FromStringAndChain(arch, bind_chain)
             if variant:
-                variant = self._substitute_parameters(variant, given_args)
+                variant = BoundFormatString.FromStringAndChain(variant, bind_chain)
             substituted_architectures.append((arch, variant))
         substituted_args = []
         for name, value in self.args:
-            name = self._substitute_parameters(name, given_args)
-            value = self._substitute_parameters(
-                value, given_args, exact_id_replacements
-            )
+            name = BoundFormatString.FromStringAndChain(name, bind_chain)
+            value = BoundFormatString.FromStringAndChain(value, bind_chain)
             substituted_args.append((name, value))
-        return BoundGroup(
-            self.id,  # No funny business in the ID field
-            images=substituted_images,
+        return BindSource(
+            source_name=self.id,
             architectures=substituted_architectures,
-            args=substituted_args,
-            depends_on_ids=depends_on_ids,
+            arguments=substituted_args,
         )
 
     def __str__(self):
@@ -635,62 +775,4 @@ class GroupTemplate(Template):
                 arch_list.append([arch, variant])
         yaml_dict["architectures"] = arch_list
         yaml_dict["args"] = dict(self.args)
-        return yaml.dump({self.id: yaml_dict})
-
-
-class BoundGroup:
-    """
-    GroupTemplate.bind produces a BoundGroup by specifying
-    all the arguments needed to build that group of images.
-
-    At this point the BoundGroup can be checked for more practical
-    errors, like the build context not existing.
-    """
-
-    def __init__(
-        self,
-        id,
-        *,
-        images,
-        architectures,
-        args,
-        depends_on_ids,
-    ):
-        self.__id = id
-        self.__images = [i for i in images]
-        self.__archiarchitectures = [(a, v) for a, v in architectures]
-        self.__args = [(n, v) for n, v in args]
-        self.__depends_on_ids = [d for d in depends_on_ids]
-
-    @property
-    def id(self):
-        return self.__id
-
-    @property
-    def images(self):
-        return self.__images
-
-    @property
-    def architectures(self):
-        return self.__archiarchitectures
-
-    @property
-    def args(self):
-        return dict(self.__args)
-
-    @property
-    def dependencies(self):
-        return self.__depends_on_ids
-
-    def __str__(self):
-        yaml_dict = {}
-        yaml_dict["images"] = [str(i) for i in self.images]
-        arch_list = []
-        for arch, variant in self.architectures:
-            if variant is None:
-                arch_list.append(arch)
-            else:
-                arch_list.append([arch, variant])
-        yaml_dict["architectures"] = arch_list
-        yaml_dict["args"] = dict(self.args)
-        return yaml.dump({self.id: yaml_dict})
+        return yaml.dump({self.id: yaml_dict}, width=float("inf"))
