@@ -19,6 +19,8 @@ import sys
 from .config import BindSource
 from .config import temporary_parse_config
 from . import oci
+from . import buildah
+from . import work
 
 
 def parse_arguments():
@@ -88,8 +90,13 @@ def main():
     print("-----------------")
     oci_graph = oci.build_graph(bound_config)
     print(oci.graph_to_dot(oci_graph))
+    print("-----------------")
+    work_graph = buildah.build_graph(oci_graph)
+    print(work.graph_to_dot(work_graph))
+    work.execute(work_graph)
 
     # Now that I have the OCI graph, it's time to turn it into buildah commands
     # Some sort of buildah.build_graph(oci_graph) to produce
     # a graph of work to execute.
+    # I can print that dot graph again for debugging (nodes are commands to run?)
     # Then I can pass that to some sort of concurrent.futures executor!
