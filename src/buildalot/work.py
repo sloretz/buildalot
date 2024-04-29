@@ -5,9 +5,9 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
-from threading import Event, RLock
+from threading import Event, Lock
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 
 class Work(ABC):
@@ -29,15 +29,23 @@ type WorkGraph = dict[Work, list[Work]]
 
 
 def execute(graph: WorkGraph, max_workers=None):
-    """Execute the given work graph."""
+    """Execute the given work graph.
+
+    This consumes the given graph and destroys it as work is completed.
+    """
     # futures: list[Future] = []
     executor = ThreadPoolExecutor(max_workers=max_workers)
     all_done = Event()
-    # Reentrant to in case f completes so fast that done callbacks are executed
-    # immediately while lock is still held
-    lock = RLock()
-    # Deep-copy because we're going to remove completed work from the graph.
-    graph = copy.deepcopy(graph)
+    lock = Lock()
+
+    def shutdown_on_error(f):
+        nonlocal all_done
+        nonlocal executor
+        e = f.exception()
+        if e is not None:
+            sys.stderr.write(f"Failed to execute command {e}\n")
+            executor.shutdown(wait=False, cancel_futures=True)
+            all_done.set()
 
     def remove_completed_work(done_work: Work):
         nonlocal all_done
@@ -55,23 +63,41 @@ def execute(graph: WorkGraph, max_workers=None):
         # nonlocal futures
         nonlocal graph
         nonlocal lock
+        future_done_callbacks: list[tuple[Future, tuple[Callable[[Future], None]]]] = []
         with lock:
             scheduled: list[Work] = []
             for work, deps in graph.items():
                 if len(deps) == 0:
-                    f = executor.submit(work)
+                    try:
+                        f = executor.submit(work)
+                    except RuntimeError:
+                        # Executor shutding down, something went wrong
+                        return
                     # https://docs.python.org/3/faq/programming.html#why-do-lambdas-defined-in-a-loop-with-different-values-all-return-the-same-result
-                    f.add_done_callback(
-                        lambda _, work=work: remove_completed_work(work)
+                    future_done_callbacks.append(
+                        (
+                            f,
+                            (
+                                shutdown_on_error,
+                                lambda _, work=work: remove_completed_work(work),
+                                lambda _: queue_next_work(),
+                            ),
+                        )
                     )
-                    f.add_done_callback(lambda _: queue_next_work())
                     scheduled.append(work)
             for work in scheduled:
                 # Prevent work getting scheduled multiple times
                 del graph[work]
 
+        # Must add done callbacks after iterating over graph because they could modify it
+        # Must add done callbacks outside of locking because lock is not reentrant
+        for future, done_callbacks in future_done_callbacks:
+            for callback in done_callbacks:
+                future.add_done_callback(callback)
+
     queue_next_work()
     all_done.wait()
+    executor.shutdown()
 
 
 def graph_to_dot(graph: WorkGraph):

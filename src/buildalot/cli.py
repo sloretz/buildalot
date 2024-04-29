@@ -91,8 +91,9 @@ def main():
     oci_graph = oci.build_graph(bound_config)
     print(oci.graph_to_dot(oci_graph))
     print("-----------------")
-    work_graph = buildah.build_graph(oci_graph)
+    work_graph = buildah.build_graph(oci_graph, push=args.push)
     print(work.graph_to_dot(work_graph))
+    print("-----------------")
     work.execute(work_graph)
 
     # Now that I have the OCI graph, it's time to turn it into buildah commands
