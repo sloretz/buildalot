@@ -94,10 +94,4 @@ def main():
     work_graph = buildah.build_graph(oci_graph, push=args.push)
     print(work.graph_to_dot(work_graph))
     print("-----------------")
-    work.execute(work_graph)
-
-    # Now that I have the OCI graph, it's time to turn it into buildah commands
-    # Some sort of buildah.build_graph(oci_graph) to produce
-    # a graph of work to execute.
-    # I can print that dot graph again for debugging (nodes are commands to run?)
-    # Then I can pass that to some sort of concurrent.futures executor!
+    work.execute(work_graph, dry_run=args.dry_run)

@@ -1,6 +1,5 @@
 from abc import abstractmethod, ABC
 from concurrent.futures import Future, ThreadPoolExecutor
-import copy
 from pathlib import Path
 import shlex
 import subprocess
@@ -8,6 +7,8 @@ import sys
 from threading import Event, Lock
 import time
 from typing import Callable, Optional
+
+from .cohesive_output import CohesiveOutput
 
 
 class Work(ABC):
@@ -28,7 +29,13 @@ class Work(ABC):
 type WorkGraph = dict[Work, list[Work]]
 
 
-def execute(graph: WorkGraph, max_workers=None):
+class WorkFailedError(Exception):
+
+    def __init__(self):
+        pass
+
+
+def execute(graph: WorkGraph, max_workers=None, dry_run=False):
     """Execute the given work graph.
 
     This consumes the given graph and destroys it as work is completed.
@@ -69,7 +76,10 @@ def execute(graph: WorkGraph, max_workers=None):
             for work, deps in graph.items():
                 if len(deps) == 0:
                     try:
-                        f = executor.submit(work)
+                        if dry_run:
+                            f = executor.submit(lambda: print(str(work)))
+                        else:
+                            f = executor.submit(work)
                     except RuntimeError:
                         # Executor shutding down, something went wrong
                         return
@@ -128,7 +138,20 @@ class ExecuteCommand(Work):
         return shlex.join(self.__cmd)
 
     def __call__(self):
-        subprocess.check_call(self.__cmd, cwd=self.__working_directory)
+        with CohesiveOutput(str(self)) as co:
+            process = subprocess.Popen(
+                self.__cmd,
+                cwd=self.__working_directory,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            while line := process.stdout.readline().decode():
+                assert line
+                co.print(line)
+            return_code = process.poll()
+            assert return_code is not None
+            if return_code != 0:
+                raise WorkFailedError
 
 
 class Retry(Work):
@@ -140,7 +163,7 @@ class Retry(Work):
         exponent=2,
         multiplier=15,
         constant=5,
-        exceptions=(subprocess.CalledProcessError,),
+        exceptions=(WorkFailedError,),
     ):
         super().__init__()
         self.__work = work

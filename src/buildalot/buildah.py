@@ -7,7 +7,6 @@ from .oci import OCIGraph, OCIImage, OCIManifest
 def _image_build(oci_image: OCIImage) -> Work:
     working_directory = oci_image.context
     cmd = [
-        "echo",
         "buildah",
         "bud",
         "-t",
@@ -27,7 +26,6 @@ def _image_build(oci_image: OCIImage) -> Work:
 
 def _image_push(oci_image: OCIImage) -> Work:
     cmd = [
-        "echo",
         "buildah",
         "push",
         oci_image.fully_qualified_name,
@@ -37,7 +35,6 @@ def _image_push(oci_image: OCIImage) -> Work:
 
 def _manifest_create(oci_manifest: OCIManifest) -> Work:
     cmd = [
-        "echo",
         "buildah",
         "manifest",
         "create",
@@ -50,7 +47,6 @@ def _manifest_add(oci_manifest: OCIManifest) -> list[Work]:
     new_work: list[Work] = []
     for image_fqn in oci_manifest.images:
         cmd = [
-            "echo",
             "buildah",
             "manifest",
             "add",
@@ -63,7 +59,6 @@ def _manifest_add(oci_manifest: OCIManifest) -> list[Work]:
 
 def _manifest_push(oci_manifest: OCIManifest) -> Work:
     cmd = [
-        "echo",
         "buildah",
         "manifest",
         "push",
