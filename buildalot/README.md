@@ -6,7 +6,7 @@
 With test deps:
 
 ```
-pip install -e buildalot/ '.[dev]'
+pip install -e 'buildalot/[dev]'
 ```
 
 Testing
