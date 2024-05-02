@@ -25,3 +25,19 @@ maintainers = [
 
 [project.scripts]
 buildalot = "buildalot.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest~=6.0",
+]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = [
+  "-ra",
+  "--import-mode=importlib",
+]
+testpaths = [
+    "tests",
+    "integration",
+]
