@@ -147,7 +147,7 @@ class ExecuteCommand(Work):
             )
             while line := process.stdout.readline().decode():
                 assert line
-                co.print(line)
+                co.write(line)
             return_code = process.poll()
             assert return_code is not None
             if return_code != 0:

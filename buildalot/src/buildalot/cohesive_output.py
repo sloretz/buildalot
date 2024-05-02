@@ -47,7 +47,7 @@ class CohesiveOutput:
                 next_output._is_active_output = True
                 cls.has_active_output = True
 
-    def print(self, line):
+    def write(self, line):
         with self._lock:
             if self._is_active_output:
                 sys.stdout.write(line)
@@ -59,7 +59,7 @@ class CohesiveOutput:
         return self
 
     def __exit__(self, t, v, tb):
-        self.print(f"<<< End output from: {self._name}\n")
+        self.write(f"<<< End output from: {self._name}\n")
         with type(self).output_lock:
             self._exited = True
             self._is_active_output = False
