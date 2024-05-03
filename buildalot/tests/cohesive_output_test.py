@@ -5,7 +5,8 @@ def test_enter_exit():
     with CohesiveOutput("foobar") as co:
         pass
 
-def test_writing_one_output(capsys):
+
+def test_one_output(capsys):
     name = "foobar"
     message = "Hello world!"
     with CohesiveOutput(name) as co:
@@ -15,4 +16,30 @@ def test_writing_one_output(capsys):
     assert stdout_lines == [
         f">>> Begin output from: {name}",
         f"{message}",
-        f"<<< End output from: {name}"]
+        f"<<< End output from: {name}",
+    ]
+
+
+def test_nested_output(capsys):
+    name = "foobar"
+    message = "Hello world!"
+    with CohesiveOutput("co1") as co1:
+        co1.write("co1: foo\n")
+        with CohesiveOutput("co2") as co2:
+            co2.write("co2: foo\n")
+            co1.write("co1: bar\n")
+            co2.write("co2: bar\n")
+        co1.write("co1: baz\n")
+    captured = capsys.readouterr()
+    stdout_lines = captured.out.split("\n")[:-1]  # -1 to remove '' from last \n
+    assert stdout_lines == [
+        ">>> Begin output from: co1",
+        "co1: foo",
+        "co1: bar",
+        "co1: baz",
+        "<<< End output from: co1",
+        ">>> Begin output from: co2",
+        "co2: foo",
+        "co2: bar",
+        "<<< End output from: co2",
+    ]

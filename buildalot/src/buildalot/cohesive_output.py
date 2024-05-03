@@ -62,6 +62,7 @@ class CohesiveOutput:
         self.write(f"<<< End output from: {self._name}\n")
         with type(self).output_lock:
             self._exited = True
-            self._is_active_output = False
-            type(self).has_active_output = False
-            type(self)._next_in_queue()
+            if self._is_active_output:
+                self._is_active_output = False
+                type(self).has_active_output = False
+                type(self)._next_in_queue()
