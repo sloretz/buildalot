@@ -1,6 +1,7 @@
-import collections
+import collections.abc
 import copy
 import graphlib
+from io import StringIO
 import re
 from typing import Optional
 
@@ -14,25 +15,6 @@ class ParseError(RuntimeError):
 
     def __init__(self, msg):
         super().__init__(msg)
-
-
-def parse_config(stream):
-    """Parse a config describing images to build.
-    Return a list of all top level groups."""
-    yaml_dict = yaml.safe_load(stream)
-
-    top_level = []
-
-    for key, item in yaml_dict.items():
-        if not isinstance(item, collections.Mapping):
-            raise ParseError(f"Top level key '{key}' must be a dictionary")
-
-    if "build" in item.keys():
-        # Image template
-        top_level.append(ImageTemplate.ParseFrom(item))
-    elif "images" in item.keys():
-        # Group
-        top_level.append(GroupTemplate.ParseFrom(item))
 
 
 class IdResolver:
@@ -224,6 +206,34 @@ class Config:
 
         ts = graphlib.TopologicalSorter(self.graph)
         self.build_order = tuple(ts.static_order())
+
+    @classmethod
+    def parse_string(cls, string):
+        """Parse a config from a string."""
+        with StringIO(string) as stream:
+            return cls.parse_stream(stream)
+
+    @classmethod
+    def parse_stream(cls, stream):
+        """Parse a config describing images to build.
+        Return a list of all top level groups."""
+        yaml_dict = yaml.safe_load(stream)
+
+        top_level = []
+
+        for key, item in yaml_dict.items():
+            if not isinstance(item, collections.abc.Mapping):
+                raise ParseError(f"Top level key '{key}' must be a dictionary")
+
+            if "build" in item.keys():
+                # Image template
+                top_level.append(ImageTemplate.parse_from(key, item))
+            elif "images" in item.keys():
+                # Group
+                top_level.append(GroupTemplate.parse_from(key, item))
+            else:
+                raise ParseError(f"{key} neither looks like an image or a group")
+        return cls(top_level)
 
     def __str__(self):
         return "\n".join([str(i) for i in self.images] + [str(g) for g in self.groups])
@@ -564,10 +574,48 @@ class ImageTemplate(Template):
         return yaml.dump({self.id: yaml_dict}, width=float("inf"))
 
     @classmethod
-    def ParseFrom(cls, yaml_dict):
+    def parse_from(cls, image_id, yaml_dict):
         """Given a parsed yaml dictionary, returns an ImageTemplate instance
         if the yaml dictionary is a valid template for one, else raises."""
-        raise NotImplementedError
+
+        allowed_things = ["name", "registry", "tag", "build"]
+        for thing in yaml_dict.keys():
+            if thing not in allowed_things:
+                return ParseError(f"Image '{image_id}' has unknown field '{thing}'")
+        allowed_things = ["context", "args"]
+        for thing in yaml_dict["build"].keys():
+            if thing not in allowed_things:
+                return ParseError(
+                    f"Image '{image_id}' has unknown field build:'{thing}'"
+                )
+
+        if "build" not in yaml_dict:
+            raise ParseError(
+                f"Cannot parse image '{image_id}' because it lacks 'build' section"
+            )
+        if "context" not in yaml_dict["build"]:
+            raise ParseError(
+                f"Cannot parse image '{image_id}' because 'build' section lacks 'context'"
+            )
+
+        name = yaml_dict["name"] if "name" in yaml_dict else None
+        registry = yaml_dict["registry"] if "registry" in yaml_dict else None
+        tag = yaml_dict["tag"] if "tag" in yaml_dict else None
+        build_context = yaml_dict["build"]["context"]
+        build_args = None
+        if "args" in yaml_dict["build"]:
+            build_args = {}
+            for arg_name, arg_value in yaml_dict["build"]["args"].items():
+                build_args[arg_name] = arg_value
+
+        return cls(
+            id=image_id,
+            name=name,
+            registry=registry,
+            tag=tag,
+            build_context=build_context,
+            build_args=build_args,
+        )
 
 
 class BoundImage:
@@ -712,6 +760,8 @@ class GroupTemplate(Template):
             images = []
         self.images = tuple(images)
 
+        if architectures is None:
+            architectures = []
         self.architectures = []
         for arch in architectures:
             if isinstance(arch, str):
@@ -753,10 +803,50 @@ class GroupTemplate(Template):
         return False
 
     @classmethod
-    def ParseFrom(cls, yaml_dict):
+    def parse_from(cls, group_id, yaml_dict):
         """Given a parsed yaml dictionary, returns an ImageTemplate instance
         if the yaml dictionary is a valid template for one, else raises."""
-        raise NotImplementedError
+        allowed_things = ["images", "architectures", "args"]
+        for thing in yaml_dict.keys():
+            if thing not in allowed_things:
+                return ParseError(f"Group '{group_id}' has unknown field '{thing}'")
+
+        if "images" not in yaml_dict:
+            raise ParseError(f"Group '{group_id}' lacks 'images' section")
+        if not isinstance(yaml_dict["images"], list):
+            raise ParseError(f"Group '{group_id}' 'images' must be a list")
+        if "architectures" in yaml_dict and not isinstance(
+            yaml_dict["architectures"], list
+        ):
+            raise ParseError(f"Group '{group_id}' 'architectures' must be a list")
+        if "args" in yaml_dict and not isinstance(yaml_dict["args"], dict):
+            raise ParseError(f"Group '{group_id}' 'args' must be a dict")
+
+        images = [image for image in yaml_dict["images"]]
+        architectures = None
+        if "architectures" in yaml_dict:
+            architectures = []
+            for maybe_tuple in yaml_dict["architectures"]:
+                if isinstance(maybe_tuple, str):
+                    architectures.append((maybe_tuple, None))
+                else:
+                    if len(maybe_tuple) != 2:
+                        raise ParseError(
+                            f"Group '{group_id}' 'architectures' invalid arch '{maybe_tuple}'"
+                        )
+                    architectures.append(tuple(maybe_tuple))
+        args = None
+        if "args" in yaml_dict:
+            build_args = {}
+            for arg_name, arg_value in yaml_dict["args"].items():
+                build_args[arg_name] = arg_value
+
+        return cls(
+            id=group_id,
+            images=images,
+            architectures=architectures,
+            args=args,
+        )
 
     def bind(self, bind_chain: BindChain) -> BindSource:
         """Returns a new Binding chained from the given binding."""
