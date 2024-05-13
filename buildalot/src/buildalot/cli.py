@@ -17,7 +17,7 @@ import re
 import sys
 
 from .config import BindSource
-from .config import temporary_parse_config
+from .config import Config
 from . import oci
 from . import buildah
 from . import work
@@ -26,7 +26,7 @@ from . import work
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--arg", action="append", default=[])
-    parser.add_argument("--config", nargs=1, default=["buildalot.yaml"])
+    parser.add_argument("--config", default="buildalot.yaml")
     parser.add_argument("--push", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--native-arch-only", action="store_true")
@@ -70,7 +70,9 @@ def check_have_all_args(have_args, need_args):
 def main():
     args = parse_arguments()
 
-    config = temporary_parse_config()
+    with open(args.config, 'r') as fin:
+        config = Config.parse_stream(fin)
+
     relevant_config = config.partial_config([args.thing_to_build])
     need_args = relevant_config.parameters()
     have_cli_build_args = parse_cli_build_args(need_args, args)

@@ -44,8 +44,12 @@ def test_image_and_group():
     print(config.groups)
     # Goup specifies ubuntu_image and rosdistro,but config allows CLI to override them
     assert set(config.parameters()) == set(["registry", "ubuntu_image", "rosdistro"])
-    assert config.get_top_level("ros_core").id == "ros_core"
-    assert config.get_top_level("humble").id == "humble"
+    image = config.get_top_level("ros_core")
+    assert image.id == "ros_core"
+
+    group = config.get_top_level("humble")
+    assert group.id == "humble"
+    assert ("rosdistro", "humble") in group.args
 
 
 _minimum_image = """

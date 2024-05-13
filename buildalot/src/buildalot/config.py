@@ -837,9 +837,9 @@ class GroupTemplate(Template):
                     architectures.append(tuple(maybe_tuple))
         args = None
         if "args" in yaml_dict:
-            build_args = {}
+            args = {}
             for arg_name, arg_value in yaml_dict["args"].items():
-                build_args[arg_name] = arg_value
+                args[arg_name] = arg_value
 
         return cls(
             id=group_id,

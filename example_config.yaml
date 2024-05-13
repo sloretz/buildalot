@@ -83,5 +83,5 @@ rolling:
     - "amd64"
     - ["arm64", "v8"]
   args:
-    rosdistro: "iron"
+    rosdistro: "rolling"
     ubuntu_image: "ubuntu:jammy"
