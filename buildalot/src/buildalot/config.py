@@ -643,7 +643,7 @@ class BoundImage:
         self.__name = name
         self.__tag = tag
         self.__build_context = build_context
-        self.__build_architectures = build_architectures
+        self.__build_architectures = tuple(build_architectures) if build_architectures else tuple()
         self.__build_args = [(n, v) for n, v in build_args]
 
     @property
