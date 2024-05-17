@@ -12,9 +12,9 @@ for dir in */; do
         echo "####################################"
         echo "# Executing test: ${dir}"
         
-        bash "${dir}test.bash"
-        
+        "${dir}test.bash"
         exit_code=$?
+
         # If the exit code is non-zero then the whole script errors
         if [[ $exit_code -ne 0 ]]; then
             failed_tests+=("${dir}")
