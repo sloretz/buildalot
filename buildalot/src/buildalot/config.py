@@ -349,111 +349,6 @@ class BoundConfig:
         return "\n".join([repr(image) for image in self.__bound_images])
 
 
-def temporary_parse_config():
-    """Placeholder before I write the parsing code."""
-    top_level = []
-    top_level.append(
-        ImageTemplate(
-            id="ros_core",
-            name="ros",
-            tag="${rosdistro}-ros-core",
-            build_context="ros2/ros-core",
-            build_args={"FROM": "${ubuntu_image}"},
-        )
-    )
-    top_level.append(
-        ImageTemplate(
-            id="ros_base",
-            name="ros",
-            tag="${rosdistro}-ros-base",
-            build_context="ros2/ros-base",
-            build_args={"FROM": "ros_core"},
-        )
-    )
-    top_level.append(
-        ImageTemplate(
-            id="perception",
-            name="ros",
-            tag="${rosdistro}-perception",
-            build_context="ros2/perception",
-            build_args={"FROM": "ros_base"},
-        )
-    )
-    top_level.append(
-        ImageTemplate(
-            id="simulation",
-            name="ros",
-            tag="${rosdistro}-simulation",
-            build_context="ros2/simulation",
-            build_args={"FROM": "ros_base"},
-        )
-    )
-    top_level.append(
-        ImageTemplate(
-            id="desktop",
-            name="ros",
-            tag="${rosdistro}-desktop",
-            build_context="ros2/desktop",
-            build_args={"FROM": "ros_base"},
-        )
-    )
-    top_level.append(
-        ImageTemplate(
-            id="desktop_full",
-            name="ros",
-            tag="${rosdistro}-desktop-full",
-            build_context="ros2/desktop-full",
-            build_args={"FROM": "desktop"},
-        )
-    )
-    top_level.append(
-        GroupTemplate(
-            id="humble",
-            images=[
-                "ros_core",
-                "ros_base",
-                "desktop",
-                "perception",
-                "simulation",
-                "desktop_full",
-            ],
-            architectures=["amd64", ["arm64", "v8"]],
-            args={"rosdistro": "humble", "ubuntu_image": "ubuntu:jammy"},
-        )
-    )
-    top_level.append(
-        GroupTemplate(
-            id="iron",
-            images=[
-                "ros_core",
-                "ros_base",
-                "desktop",
-                "perception",
-                "simulation",
-                "desktop_full",
-            ],
-            architectures=["amd64", ["arm64", "v8"]],
-            args={"rosdistro": "iron", "ubuntu_image": "ubuntu:jammy"},
-        )
-    )
-    top_level.append(
-        GroupTemplate(
-            id="rolling",
-            images=[
-                "ros_core",
-                "ros_base",
-                "desktop",
-                "perception",
-                # "simulation",
-                # "desktop_full",
-            ],
-            architectures=["amd64", ["arm64", "v8"]],
-            args={"rosdistro": "rolling", "ubuntu_image": "ubuntu:jammy"},
-        )
-    )
-    return Config(top_level)
-
-
 class Template:
 
     def __init__(self, parameters):
@@ -539,23 +434,37 @@ class ImageTemplate(Template):
 
     def bind(self, bind_chain: BindChain):
         """Returns BoundImage with all parameters and exact_id_replacements expanded."""
+        image_default_binding = BindSource(
+            source_name="__image_defaults__",
+            architectures=None,
+            arguments=(
+                ("registry", "localhost"),
+                ("tag", "latest"),
+            ),
+        )
+        defaulted_bind_chain = copy.deepcopy(bind_chain)
+        defaulted_bind_chain.add_child_source(image_default_binding)
         substituted_args = []
         for name, value in self.build_args:
-            name = BoundFormatString.FromStringAndChain(name, bind_chain)
+            name = BoundFormatString.FromStringAndChain(name, defaulted_bind_chain)
             if isinstance(value, str):
-                value = BoundFormatString.FromStringAndChain(value, bind_chain)
+                value = BoundFormatString.FromStringAndChain(
+                    value, defaulted_bind_chain
+                )
             else:
                 assert isinstance(value, IdResolver)
             substituted_args.append((name, value))
         return BoundImage(
             id=self.id,  # No funny business in the ID field
-            registry=BoundFormatString.FromStringAndChain(self.registry, bind_chain),
-            name=BoundFormatString.FromStringAndChain(self.name, bind_chain),
-            tag=BoundFormatString.FromStringAndChain(self.tag, bind_chain),
-            build_context=BoundFormatString.FromStringAndChain(
-                self.build_context, bind_chain
+            registry=BoundFormatString.FromStringAndChain(
+                self.registry, defaulted_bind_chain
             ),
-            build_architectures=bind_chain.architectures,
+            name=BoundFormatString.FromStringAndChain(self.name, defaulted_bind_chain),
+            tag=BoundFormatString.FromStringAndChain(self.tag, defaulted_bind_chain),
+            build_context=BoundFormatString.FromStringAndChain(
+                self.build_context, defaulted_bind_chain
+            ),
+            build_architectures=defaulted_bind_chain.architectures,
             build_args=substituted_args,
         )
 
@@ -643,7 +552,9 @@ class BoundImage:
         self.__name = name
         self.__tag = tag
         self.__build_context = build_context
-        self.__build_architectures = tuple(build_architectures) if build_architectures else tuple()
+        self.__build_architectures = (
+            tuple(build_architectures) if build_architectures else tuple()
+        )
         self.__build_args = [(n, v) for n, v in build_args]
 
     @property
@@ -750,7 +661,7 @@ class BoundImage:
 class GroupTemplate(Template):
     """Represents a templated group of images."""
 
-    def __init__(self, id, *, images=None, architectures=None, args=None):
+    def __init__(self, id, *, images=None, architectures=None, provides_parameters=None):
 
         if not images:
             raise ParseError(f"Key {id} must have at least one image specified")
@@ -772,9 +683,9 @@ class GroupTemplate(Template):
                 self.architectures.append(tuple(arch))
             else:
                 raise ParseError(f"Key {id} has invalid architecture {arch}")
-        if args is None:
-            args = {}
-        self.args = tuple(args.items())
+        if provides_parameters is None:
+            provides_parameters = {}
+        self.provides_parameters = tuple(provides_parameters.items())
 
         parameters = []
         for image in self.images:
@@ -783,7 +694,7 @@ class GroupTemplate(Template):
             parameters.extend(self._extract_parameters(arch[0]))
             if arch[1]:
                 parameters.extend(self._extract_parameters(arch[1]))
-        for name, value in self.args:
+        for name, value in self.provides_parameters:
             parameters.extend(self._extract_parameters(name))
             parameters.extend(self._extract_parameters(value))
         super().__init__(parameters)
@@ -797,7 +708,7 @@ class GroupTemplate(Template):
         for image in self.images:
             if image == exact_id:
                 return True
-        for _, value in self.args:
+        for _, value in self.provides_parameters:
             if value == exact_id:
                 return True
         return False
@@ -806,7 +717,7 @@ class GroupTemplate(Template):
     def parse_from(cls, group_id, yaml_dict):
         """Given a parsed yaml dictionary, returns an ImageTemplate instance
         if the yaml dictionary is a valid template for one, else raises."""
-        allowed_things = ["images", "architectures", "args"]
+        allowed_things = ["images", "architectures", "parameters"]
         for thing in yaml_dict.keys():
             if thing not in allowed_things:
                 return ParseError(f"Group '{group_id}' has unknown field '{thing}'")
@@ -819,8 +730,8 @@ class GroupTemplate(Template):
             yaml_dict["architectures"], list
         ):
             raise ParseError(f"Group '{group_id}' 'architectures' must be a list")
-        if "args" in yaml_dict and not isinstance(yaml_dict["args"], dict):
-            raise ParseError(f"Group '{group_id}' 'args' must be a dict")
+        if "parameters" in yaml_dict and not isinstance(yaml_dict["parameters"], dict):
+            raise ParseError(f"Group '{group_id}' 'parameters' must be a dict")
 
         images = [image for image in yaml_dict["images"]]
         architectures = None
@@ -835,17 +746,17 @@ class GroupTemplate(Template):
                             f"Group '{group_id}' 'architectures' invalid arch '{maybe_tuple}'"
                         )
                     architectures.append(tuple(maybe_tuple))
-        args = None
-        if "args" in yaml_dict:
-            args = {}
-            for arg_name, arg_value in yaml_dict["args"].items():
-                args[arg_name] = arg_value
+        parameters = None
+        if "parameters" in yaml_dict:
+            parameters = {}
+            for param_name, param_value in yaml_dict["parameters"].items():
+                parameters[param_name] = param_value
 
         return cls(
             id=group_id,
             images=images,
             architectures=architectures,
-            args=args,
+            provides_parameters=parameters,
         )
 
     def bind(self, bind_chain: BindChain) -> BindSource:
@@ -856,15 +767,15 @@ class GroupTemplate(Template):
             if variant:
                 variant = BoundFormatString.FromStringAndChain(variant, bind_chain)
             substituted_architectures.append((arch, variant))
-        substituted_args = []
-        for name, value in self.args:
+        substituted_parameters = []
+        for name, value in self.provides_parameters:
             name = BoundFormatString.FromStringAndChain(name, bind_chain)
             value = BoundFormatString.FromStringAndChain(value, bind_chain)
-            substituted_args.append((name, value))
+            substituted_parameters.append((name, value))
         return BindSource(
             source_name=self.id,
             architectures=substituted_architectures,
-            arguments=substituted_args,
+            arguments=substituted_parameters,
         )
 
     def __str__(self):
@@ -877,5 +788,5 @@ class GroupTemplate(Template):
             else:
                 arch_list.append([arch, variant])
         yaml_dict["architectures"] = arch_list
-        yaml_dict["args"] = dict(self.args)
+        yaml_dict["parameters"] = dict(self.provides_parameters)
         return yaml.dump({self.id: yaml_dict}, width=float("inf"))

@@ -32,7 +32,7 @@ humble:
   architectures:
     - "amd64"
     - ["arm64", "v8"]
-  args:
+  parameters:
     rosdistro: "humble"
     ubuntu_image: "ubuntu:jammy"
 """
@@ -40,8 +40,6 @@ humble:
 
 def test_image_and_group():
     config = Config.parse_string(_image_and_group)
-    print(config.images)
-    print(config.groups)
     # Goup specifies ubuntu_image and rosdistro,but config allows CLI to override them
     assert set(config.parameters()) == set(["registry", "ubuntu_image", "rosdistro"])
     image = config.get_top_level("ros_core")
@@ -49,7 +47,7 @@ def test_image_and_group():
 
     group = config.get_top_level("humble")
     assert group.id == "humble"
-    assert ("rosdistro", "humble") in group.args
+    assert ("rosdistro", "humble") in group.provides_parameters
 
 
 _minimum_image = """

@@ -1,0 +1,14 @@
+just_the_image:
+  name: "buildalot_integration_test"
+  build:
+    context: "."
+    args:
+      content: ${content}
+      filename: ${filename}
+
+single_group:
+  images:
+    - just_the_image
+  parameters:
+    content: "single group test success"
+    filename: single_group.txt

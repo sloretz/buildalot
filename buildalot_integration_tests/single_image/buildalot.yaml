@@ -1,6 +1,4 @@
 single_image:
-  registry: "localhost"
   name: "buildalot_integration_test"
-  tag: "single_image"
   build:
     context: "."
