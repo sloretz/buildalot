@@ -78,4 +78,3 @@ def test_minimum_image_and_group():
     assert set(config.parameters()) == set(["registry", "name", "tag", "some_path"])
     assert config.get_top_level("some_image").id == "some_image"
     assert config.get_top_level("some_group").id == "some_group"
-    
