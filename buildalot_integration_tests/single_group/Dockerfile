@@ -1,4 +1,4 @@
-FROM busybox:stable
+FROM ghcr.io/containerd/busybox:1.36
 
 ARG content
 ARG filename

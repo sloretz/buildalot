@@ -1,0 +1,19 @@
+just_the_image:
+  name: "buildalot_integration_test"
+  build:
+    context: "."
+
+multiarch_group:
+  images:
+    - just_the_image
+  architectures:
+    - amd64
+    - [arm, v5]
+    - [arm, v6]
+    - [arm, v7]
+    - [arm64, v8]
+    - "386"
+    - mips64le
+    - ppc64le
+    - riscv64
+    - s390x
