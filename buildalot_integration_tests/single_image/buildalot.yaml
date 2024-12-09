@@ -1,0 +1,4 @@
+single_image:
+  name: "buildalot_integration_test"
+  build:
+    context: "."
