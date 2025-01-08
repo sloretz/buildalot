@@ -1,4 +1,5 @@
 from buildalot.config import Config
+from buildalot.config import Exclusion
 
 
 _single_image = """
@@ -78,3 +79,47 @@ def test_minimum_image_and_group():
     assert set(config.parameters()) == set(["registry", "name", "tag", "some_path"])
     assert config.get_top_level("some_image").id == "some_image"
     assert config.get_top_level("some_group").id == "some_group"
+
+
+_image_and_group_with_exclusion = """
+ros_core:
+  name: "ros"
+  tag: "ros-core"
+  build:
+    context: "ros2/ros-core"
+    args:
+      FROM: "ubuntu:jammy"
+humble:
+  images:
+    - ros_core
+  architectures:
+    - "amd64"
+    - ["arm64", "v8"]
+  exclude:
+    - architecture: "amd64"
+      images:
+        - ros_core
+jazzy:
+  images:
+    - ros_core
+  architectures:
+    - "amd64"
+    - ["arm64", "v8"]
+  exclude:
+    - architecture: ["arm64", "v8"]
+      images:
+        - ros_core
+"""
+
+
+def test_image_and_group_with_exclusion():
+    config = Config.parse_string(_image_and_group_with_exclusion)
+    image = config.get_top_level("ros_core")
+    assert image.id == "ros_core"
+
+    humble = config.get_top_level("humble")
+    assert humble.exclusions == tuple([Exclusion(image_id="ros_core", arch="amd64")])
+    jazzy = config.get_top_level("jazzy")
+    assert jazzy.exclusions == tuple(
+        [Exclusion(image_id="ros_core", arch="arm64", variant="v8")]
+    )

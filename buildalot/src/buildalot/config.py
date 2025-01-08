@@ -1,5 +1,6 @@
 import collections.abc
 import copy
+from dataclasses import dataclass
 import graphlib
 from io import StringIO
 import re
@@ -72,6 +73,14 @@ class BoundValue:
         return f'<BoundValue(source_name="{self.source_name}", value="{self.value}">'
 
 
+@dataclass
+class Exclusion:
+
+    image_id: str
+    arch: str
+    variant: Optional[str] = None
+
+
 class BindSource:
     """Architectures and arguments that get bound to Image."""
 
@@ -81,10 +90,12 @@ class BindSource:
         source_name: str,
         architectures: Optional[list[tuple[str, Optional[str]]]],
         arguments: list[tuple[str, str]],
+        exclusions: Optional[list[Exclusion]] = None,
     ):
         self.__source_name = source_name
         self.__architectures = None if architectures is None else tuple(architectures)
         self.__arguments = tuple(arguments)
+        self.__exclusions = tuple() if exclusions is None else tuple(exclusions)
 
     @property
     def source_name(self):
@@ -93,6 +104,10 @@ class BindSource:
     @property
     def architectures(self):
         return self.__architectures
+
+    @property
+    def exclusions(self) -> tuple[Exclusion]:
+        return self.__exclusions
 
     @property
     def arguments(self):
@@ -122,6 +137,30 @@ class BindChain:
                         )
                     )
                 return tuple(value)
+
+    def architectures_for_image(self, image_id):
+        for binding in self._links:
+            if binding.architectures is not None:
+                exclude_for_image = []
+                for e in binding.exclusions:
+                    if e.image_id == image_id:
+                        exclude_for_image.append((e.arch, e.variant))
+                value = []
+                for arch, variant in binding.architectures:
+                    if (arch, variant) in exclude_for_image:
+                        continue
+                    value.append(
+                        (
+                            BoundValue(source_name=binding.source_name, value=arch),
+                            BoundValue(source_name=binding.source_name, value=variant),
+                        )
+                    )
+                if binding.exclusions and len(value) == 0:
+                    raise RuntimeError(
+                        f"All architectures for image {image_id} were excluded"
+                    )
+                return tuple(value)
+        return self.architectures
 
     def argument_value(self, name):
         """Return value of arghument."""
@@ -279,6 +318,7 @@ class Config:
         # nor have the time to make it possible to build multiple top
         # level groups right now
         if len(self.groups) > 1:
+            print(self)  # XXX TODO(shane, why does ROSISH test result in Humble and Noetic groups? Might have to do some deeper unit testing here)
             raise NotImplementedError
 
         bind_chain = BindChain(bind_source)
@@ -454,6 +494,8 @@ class ImageTemplate(Template):
             else:
                 assert isinstance(value, IdResolver)
             substituted_args.append((name, value))
+        # Ask bind chain for all non-excluded architectures
+        architectures = defaulted_bind_chain.architectures_for_image(self.id)
         return BoundImage(
             id=self.id,  # No funny business in the ID field
             registry=BoundFormatString.FromStringAndChain(
@@ -464,7 +506,7 @@ class ImageTemplate(Template):
             build_context=BoundFormatString.FromStringAndChain(
                 self.build_context, defaulted_bind_chain
             ),
-            build_architectures=defaulted_bind_chain.architectures,
+            build_architectures=architectures,
             build_args=substituted_args,
         )
 
@@ -490,11 +532,11 @@ class ImageTemplate(Template):
         allowed_things = ["name", "registry", "tag", "build"]
         for thing in yaml_dict.keys():
             if thing not in allowed_things:
-                return ParseError(f"Image '{image_id}' has unknown field '{thing}'")
+                raise ParseError(f"Image '{image_id}' has unknown field '{thing}'")
         allowed_things = ["context", "args"]
         for thing in yaml_dict["build"].keys():
             if thing not in allowed_things:
-                return ParseError(
+                raise ParseError(
                     f"Image '{image_id}' has unknown field build:'{thing}'"
                 )
 
@@ -661,7 +703,15 @@ class BoundImage:
 class GroupTemplate(Template):
     """Represents a templated group of images."""
 
-    def __init__(self, id, *, images=None, architectures=None, provides_parameters=None):
+    def __init__(
+        self,
+        id,
+        *,
+        images=None,
+        architectures=None,
+        provides_parameters=None,
+        exclusions=None,
+    ):
 
         if not images:
             raise ParseError(f"Key {id} must have at least one image specified")
@@ -699,6 +749,10 @@ class GroupTemplate(Template):
             parameters.extend(self._extract_parameters(value))
         super().__init__(parameters)
 
+        self.exclusions = self.__exclusions = (
+            tuple() if exclusions is None else tuple(exclusions)
+        )
+
     def uses_id(self, exact_id):
         # Allowed to use top-level ID in:
         #   * images
@@ -717,10 +771,10 @@ class GroupTemplate(Template):
     def parse_from(cls, group_id, yaml_dict):
         """Given a parsed yaml dictionary, returns an ImageTemplate instance
         if the yaml dictionary is a valid template for one, else raises."""
-        allowed_things = ["images", "architectures", "parameters"]
+        allowed_things = ["images", "architectures", "parameters", "exclude"]
         for thing in yaml_dict.keys():
             if thing not in allowed_things:
-                return ParseError(f"Group '{group_id}' has unknown field '{thing}'")
+                raise ParseError(f"Group '{group_id}' has unknown field '{thing}'")
 
         if "images" not in yaml_dict:
             raise ParseError(f"Group '{group_id}' lacks 'images' section")
@@ -732,32 +786,68 @@ class GroupTemplate(Template):
             raise ParseError(f"Group '{group_id}' 'architectures' must be a list")
         if "parameters" in yaml_dict and not isinstance(yaml_dict["parameters"], dict):
             raise ParseError(f"Group '{group_id}' 'parameters' must be a dict")
+        if "exclude" in yaml_dict and not isinstance(yaml_dict["exclude"], list):
+            raise ParseError(f"Group '{group_id}' 'exclude' must be a list")
 
         images = [image for image in yaml_dict["images"]]
         architectures = None
         if "architectures" in yaml_dict:
             architectures = []
             for maybe_tuple in yaml_dict["architectures"]:
-                if isinstance(maybe_tuple, str):
-                    architectures.append((maybe_tuple, None))
-                else:
-                    if len(maybe_tuple) != 2:
-                        raise ParseError(
-                            f"Group '{group_id}' 'architectures' invalid arch '{maybe_tuple}'"
-                        )
-                    architectures.append(tuple(maybe_tuple))
+                try:
+                    architectures.append(cls._parse_arch(maybe_tuple))
+                except ParseError:
+                    raise ParseError(
+                        f"Group '{group_id}' 'architectures' invalid arch '{maybe_tuple}'"
+                    )
         parameters = None
         if "parameters" in yaml_dict:
             parameters = {}
             for param_name, param_value in yaml_dict["parameters"].items():
                 parameters[param_name] = param_value
 
+        exclusions = []
+        if "exclude" in yaml_dict:
+            for ex_dict in yaml_dict["exclude"]:
+                if not isinstance(ex_dict, dict):
+                    raise ParseError(
+                        f"Group '{group_id}' 'exclude' invalid '{ex_dict}'"
+                    )
+                known_keys = ("images", "architecture")
+                unknown_keys = set(ex_dict.keys()).difference(known_keys)
+                if unknown_keys:
+                    raise ParseError(
+                        f"Group '{group_id}' 'exclude' invalid keys '{tuple(unknown_keys)}'. Allowed values are {known_keys}"
+                    )
+                arch = cls._parse_arch(ex_dict["architecture"])
+                if not isinstance(ex_dict["images"], list):
+                    raise ParseError(
+                        f"Group '{group_id}' 'exclude/images' must be a list"
+                    )
+                for image in ex_dict["images"]:
+                    if not isinstance(image, str):
+                        raise ParseError(
+                            f"Group '{group_id}' excluded images must be a string"
+                        )
+                    exclusions.append(
+                        Exclusion(image_id=image, arch=arch[0], variant=arch[1])
+                    )
+
         return cls(
             id=group_id,
             images=images,
             architectures=architectures,
             provides_parameters=parameters,
+            exclusions=exclusions,
         )
+
+    @classmethod
+    def _parse_arch(cls, maybe_tuple):
+        if isinstance(maybe_tuple, str):
+            return (maybe_tuple, None)
+        if len(maybe_tuple) != 2:
+            raise ParseError(f"invalid architecture '{maybe_tuple}'")
+        return tuple(maybe_tuple)
 
     def bind(self, bind_chain: BindChain) -> BindSource:
         """Returns a new Binding chained from the given binding."""
@@ -789,4 +879,14 @@ class GroupTemplate(Template):
                 arch_list.append([arch, variant])
         yaml_dict["architectures"] = arch_list
         yaml_dict["parameters"] = dict(self.provides_parameters)
+        if self.exclusions:
+            yaml_dict["exclude"] = {}
+            ex_arches = {}
+            for ex in self.exclusions:
+                if (ex.arch, ex.variant) not in ex_arches:
+                    ex_arches[(ex.arch, ex.variant)] = {
+                        "architecture": ex.arch if ex.variant is None else [ex.arch, ex.variant],
+                        "images": []
+                    }
+                ex_arches[(ex.arch, ex.variant)]["images"].append(ex.image_id)
         return yaml.dump({self.id: yaml_dict}, width=float("inf"))

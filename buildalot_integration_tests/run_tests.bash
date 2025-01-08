@@ -28,6 +28,7 @@ if [[ ${#failed_tests[@]} -ne 0 ]]; then
     for failed_dir in "${failed_tests[@]}"; do
         echo "#    ${failed_dir}"
     done
+    exit 1
 else
     echo "# Result: All tests passed."
 fi
